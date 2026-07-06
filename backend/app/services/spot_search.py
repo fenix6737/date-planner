@@ -53,6 +53,14 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
   return 2 * r * math.asin(math.sqrt(a))
 
 
+CATEGORY_COMPAT: dict[str, set[str]] = {
+  "cafe": {"cafe", "gourmet"},
+  "gourmet": {"gourmet", "cafe"},
+  "sightseeing": {"sightseeing", "activity"},
+  "activity": {"activity", "sightseeing"},
+}
+
+
 class SpotSearchService:
   async def search(
     self,
@@ -90,8 +98,10 @@ class SpotSearchService:
       dist = _haversine_km(lat, lng, spot.lat, spot.lng)
       if dist > radius_km:
         continue
-      if category and spot.category != category:
-        continue
+      if category:
+        allowed = CATEGORY_COMPAT.get(category, {category})
+        if spot.category not in allowed:
+          continue
       if budget is not None and spot.price > budget:
         continue
       results.append(spot)
@@ -210,14 +220,18 @@ class SpotSearchService:
       seen.add(key)
       if _haversine_km(lat, lng, spot.lat, spot.lng) > radius_km:
         continue
-      if category and spot.category != category:
-        continue
+      if category:
+        allowed = CATEGORY_COMPAT.get(category, {category})
+        if spot.category not in allowed:
+          continue
       if budget is not None and spot.price > budget:
         continue
       filtered.append(spot)
     return filtered
 
   async def get_spot_info(self, spot_id: str, source: Optional[str] = None) -> Optional[SpotResult]:
+    if source == "hotpepper" and settings.hotpepper_api_key:
+      return await self._get_hotpepper_spot(spot_id)
     if spot_id.startswith("mock-") or source == "mock":
       parts = spot_id.split("-")
       if len(parts) >= 2:
@@ -249,3 +263,39 @@ class SpotSearchService:
         except ValueError:
           pass
     return None
+
+  async def _get_hotpepper_spot(self, shop_id: str) -> Optional[SpotResult]:
+    try:
+      async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+          "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/",
+          params={"key": settings.hotpepper_api_key, "id": shop_id, "format": "json"},
+        )
+        response.raise_for_status()
+        data = response.json()
+      shops = data.get("results", {}).get("shop", [])
+      if isinstance(shops, dict):
+        shops = [shops]
+      if not shops:
+        return None
+      shop = shops[0]
+      avg = shop.get("budget", {}).get("average", "0円")
+      price = int("".join(filter(str.isdigit, avg)) or "0")
+      open_hours = shop.get("open", "")
+      return SpotResult(
+        id=shop.get("id"),
+        name=shop.get("name", ""),
+        address=shop.get("address", ""),
+        lat=float(shop["lat"]),
+        lng=float(shop["lng"]),
+        price=price,
+        rating=0.0,
+        review_count=0,
+        source="hotpepper",
+        category="gourmet",
+        image_url=shop.get("photo", {}).get("pc", {}).get("l"),
+        hours=open_hours,
+        url=shop.get("urls", {}).get("pc"),
+      )
+    except Exception:
+      return None

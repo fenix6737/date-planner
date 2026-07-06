@@ -98,6 +98,12 @@ export default function NewPlanPage() {
           {stored.meta.address} 発 / {STYLE_LABELS[stored.meta.route_style] || stored.meta.route_style} /
           {stored.plan.total_time} / {stored.plan.total_distance}
         </p>
+        <p className="mt-2 text-base font-bold text-[#5c4030]">
+          料金目安 合計 {items.reduce((s, i) => s + i.budget_est, 0).toLocaleString()}円
+          <span className="ml-2 text-sm font-normal text-[#8b7355]">
+            （予算 {stored.meta.budget.toLocaleString()}円）
+          </span>
+        </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
@@ -109,7 +115,7 @@ export default function NewPlanPage() {
             totalTime={stored.plan.total_time}
             totalDistance={stored.plan.total_distance}
             totalPrice={items.reduce((s, i) => s + i.budget_est, 0)}
-            compact
+            compact={false}
           />
         </div>
         <div className="space-y-4">

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { suggestPlaces, type SuggestItem } from "@/lib/api";
-import { localSuggest } from "@/lib/localSuggest";
+import { localSuggest, rankSuggestions } from "@/lib/localSuggest";
 
 interface PlaceAutocompleteProps {
   id: string;
@@ -16,17 +16,23 @@ interface PlaceAutocompleteProps {
   onSelect: (item: SuggestItem) => void;
 }
 
-function mergeSuggestions(local: SuggestItem[], remote: SuggestItem[], limit: number): SuggestItem[] {
-  const merged: SuggestItem[] = [];
+function mergeSuggestions(
+  query: string,
+  local: SuggestItem[],
+  remote: SuggestItem[],
+  limit: number,
+  nearLat?: number,
+  nearLng?: number
+): SuggestItem[] {
+  const combined: SuggestItem[] = [];
   const seen = new Set<string>();
   for (const item of [...local, ...remote]) {
     const key = `${item.name}:${item.lat}:${item.lng}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    merged.push(item);
-    if (merged.length >= limit) break;
+    combined.push(item);
   }
-  return merged;
+  return rankSuggestions(query, combined, limit, nearLat, nearLng);
 }
 
 export default function PlaceAutocomplete({
@@ -70,7 +76,7 @@ export default function PlaceAutocomplete({
       try {
         const remote = await suggestPlaces(query, nearLat, nearLng, limit);
         if (current !== requestId.current) return;
-        setSuggestions(mergeSuggestions(local, remote, limit));
+        setSuggestions(mergeSuggestions(query, local, remote, limit, nearLat, nearLng));
       } catch {
         if (current !== requestId.current) return;
         setFetchError(local.length === 0);
