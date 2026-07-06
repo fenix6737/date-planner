@@ -1,4 +1,5 @@
 # Render Blueprint: https://render.com/docs/blueprint-spec
+# Repo default branch is master
 databases:
   - name: dateplanner-db
     plan: free
@@ -25,7 +26,7 @@ services:
       - key: MOCK_MODE
         value: "false"
       - key: CORS_ORIGINS
-        value: https://dateplanner-web.onrender.com
+        value: https://dateplanner-web.onrender.com,http://localhost:3000
 
   - type: web
     name: dateplanner-web
@@ -35,4 +36,6 @@ services:
     plan: free
     envVars:
       - key: NEXT_PUBLIC_API_URL
+        value: ""
+      - key: API_PROXY_URL
         value: https://dateplanner-api.onrender.com
