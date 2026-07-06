@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #e8ddd0;
+  --foreground: #2c2419;
+  --accent: #8b5e3c;
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.7);
+}
+
+body {
+  color: var(--foreground);
+  background: linear-gradient(160deg, #e8ddd0 0%, #f0e6d8 40%, #e2d4c4 100%);
+  min-height: 100vh;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible {
+  outline: 2px solid #8b5e3c;
+  outline-offset: 2px;
+}
+
+@layer components {
+  .glass {
+    @apply rounded-2xl border border-white/60 bg-white/50 shadow-lg backdrop-blur-md;
+  }
+
+  .glass-soft {
+    @apply rounded-xl border border-white/50 bg-white/40 backdrop-blur-sm;
+  }
+
+  .btn-primary {
+    @apply min-h-touch rounded-xl bg-[#8b5e3c] px-6 py-3 font-medium text-white shadow-md transition-colors hover:bg-[#7a5235] active:bg-[#6d4a2f] focus:outline-none focus:ring-2 focus:ring-[#8b5e3c]/40 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply min-h-touch rounded-xl border border-[#8b5e3c]/30 bg-white/60 px-6 py-3 font-medium text-[#5c4030] backdrop-blur-sm transition-colors hover:bg-white/80 active:bg-white/90 focus:outline-none focus:ring-2 focus:ring-[#8b5e3c]/20;
+  }
+
+  .input-field {
+    @apply min-h-[52px] w-full rounded-xl border border-white/70 bg-white/70 px-4 py-3 text-base text-[#2c2419] shadow-sm backdrop-blur-sm placeholder:text-[#8b7355] focus:border-[#8b5e3c]/50 focus:outline-none focus:ring-2 focus:ring-[#8b5e3c]/20;
+  }
+
+  .suggest-list {
+    @apply rounded-xl border-2 border-[#8b5e3c]/25 bg-white shadow-2xl;
+  }
+
+  .suggest-item {
+    @apply min-h-[60px] w-full border-b border-[#ead9c8]/80 px-5 py-4 text-left transition-colors last:border-b-0 hover:bg-[#f5ebe0] active:bg-[#ead9c8];
+  }
+
+  .suggest-hint {
+    @apply border-b border-[#ead9c8]/80 bg-[#faf6f1];
+  }
+
+  .chip {
+    @apply min-h-touch cursor-pointer rounded-full border border-white/70 bg-white/50 px-5 py-2 text-sm font-medium text-[#5c4030] backdrop-blur-sm transition-colors hover:bg-white/70 active:bg-white/60;
+  }
+
+  .chip-active {
+    @apply border-[#8b5e3c]/40 bg-[#8b5e3c] text-white shadow-md hover:bg-[#7a5235] active:bg-[#6d4a2f];
+  }
+
+  .style-btn {
+    @apply rounded-xl border border-white/70 bg-white/50 p-4 text-left text-[#5c4030] transition-colors hover:bg-white/70 active:bg-white/60;
+  }
+
+  .style-btn-active {
+    @apply border-[#8b5e3c]/40 bg-[#8b5e3c] text-white shadow-md hover:bg-[#7a5235] active:bg-[#6d4a2f];
+  }
+}

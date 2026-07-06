@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dateplanner
+      POSTGRES_PASSWORD: dateplanner
+      POSTGRES_DB: dateplanner
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dateplanner"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # OSRM with pre-processed Japan data (foot profile).
+  # First run downloads data; for dev, backend falls back to haversine if OSRM is unavailable.
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    command: osrm-routed --algorithm mld /data/japan-latest.osrm
+    ports:
+      - "5000:5000"
+    volumes:
+      - osrm_data:/data
+
+volumes:
+  postgres_data:
+  osrm_data:
