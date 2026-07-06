@@ -25,9 +25,12 @@ async def search_spots(
 async def spot_info(
   id: str = Query(..., alias="id"),
   source: Optional[str] = None,
+  name: Optional[str] = None,
+  lat: Optional[float] = None,
+  lng: Optional[float] = None,
 ):
   service = SpotSearchService()
-  spot = await service.get_spot_info(id, source)
+  spot = await service.get_spot_info(id, source, name=name, lat=lat, lng=lng)
   if not spot:
     raise HTTPException(status_code=404, detail="店舗が見つかりません")
   return spot

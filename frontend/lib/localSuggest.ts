@@ -22,72 +22,66 @@ function stripAdminSuffix(text: string): string {
   return text;
 }
 
-function scorePlace(query: string, place: LocalPlace): number | null {
+export function rankPlace(query: string, place: Pick<SuggestItem, "name" | "address">): number | null {
   const q = normalize(query);
-  if (!q) return null;
+  if (!q) {
+    return place.name === place.address ? 0 : 5;
+  }
 
   const qBase = stripAdminSuffix(q);
-  const name = normalize(place.name);
-  const nameBase = stripAdminSuffix(name);
+  const names = [normalize(place.name), normalize(place.address)];
+  let best: number | null = null;
 
-  if (name === q || nameBase === qBase) return 0;
-  if (name.startsWith(q) || nameBase.startsWith(qBase)) return 1;
+  for (const cand of names) {
+    if (!cand) continue;
+    const candBase = stripAdminSuffix(cand);
+    let score: number | null = null;
 
-  for (const alias of place.aliases || []) {
-    const a = normalize(alias);
-    if (a === q || a.startsWith(q)) return 2;
+    if (cand === q || candBase === qBase) score = 0;
+    else if (cand.startsWith(q) || candBase.startsWith(qBase)) score = 1;
+    else if (q.startsWith(cand) || qBase.startsWith(candBase)) score = 2;
+    else if (cand.includes(q) || candBase.includes(qBase)) score = 3;
+    else if (q.includes(cand) || qBase.includes(candBase)) score = 4;
+
+    if (score !== null) {
+      best = best === null ? score : Math.min(best, score);
+    }
   }
 
-  if (name.includes(q) || nameBase.includes(qBase)) return 3;
-
-  const addr = normalize(place.address);
-  const addrBase = stripAdminSuffix(addr);
-  if (addr.includes(q) || addrBase.includes(qBase)) return 4;
-
-  return null;
+  return best;
 }
 
-export function rankSuggestions(
+function scorePlace(query: string, place: LocalPlace): number | null {
+  return rankPlace(query, place);
+}
+
+export function mergeRankedSuggestions(
   query: string,
-  items: SuggestItem[],
-  limit = 20,
-  nearLat?: number,
-  nearLng?: number
+  local: SuggestItem[],
+  remote: SuggestItem[],
+  limit: number
 ): SuggestItem[] {
-  const trimmed = query.trim();
-  if (!trimmed) return items.slice(0, limit);
-
-  const scored: Array<{ score: number; dist: number; item: SuggestItem }> = [];
-  for (const item of items) {
-    const place: LocalPlace = {
-      name: item.name,
-      address: item.address,
-      lat: item.lat,
-      lng: item.lng,
-    };
-    const score = scorePlace(trimmed, place);
-    if (score === null) continue;
-    const dist =
-      nearLat !== undefined && nearLng !== undefined
-        ? Math.hypot(item.lat - nearLat, item.lng - nearLng)
-        : 0;
-    scored.push({ score, dist, item });
-  }
-
-  scored.sort(
-    (a, b) => a.score - b.score || a.dist - b.dist || a.item.name.length - b.item.name.length
-  );
-
-  const results: SuggestItem[] = [];
+  const combined = [...local, ...remote];
   const seen = new Set<string>();
-  for (const { item } of scored) {
-    const key = `${item.name}:${item.lat}`;
+  const ranked: Array<{ item: SuggestItem; score: number }> = [];
+
+  for (const item of combined) {
+    const key = `${item.name}:${item.lat}:${item.lng}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push(item);
-    if (results.length >= limit) break;
+    const score = rankPlace(query, item);
+    if (score === null) continue;
+    ranked.push({ item, score });
   }
-  return results;
+
+  ranked.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.item.name.length - b.item.name.length ||
+      a.item.name.localeCompare(b.item.name, "ja")
+  );
+
+  return ranked.slice(0, limit).map((entry) => entry.item);
 }
 
 export function localSuggest(
@@ -101,12 +95,38 @@ export function localSuggest(
     return LOCAL_PLACES.filter((p) => p.address === p.name).slice(0, limit);
   }
 
-  const all: SuggestItem[] = LOCAL_PLACES.map((p) => ({
-    name: p.name,
-    address: p.address,
-    lat: p.lat,
-    lng: p.lng,
-  }));
+  const scored: Array<{ score: number; dist: number; place: LocalPlace }> = [];
+  for (const place of LOCAL_PLACES) {
+    const score = scorePlace(trimmed, place);
+    if (score === null) continue;
+    const dist =
+      nearLat !== undefined && nearLng !== undefined
+        ? Math.hypot(place.lat - nearLat, place.lng - nearLng)
+        : 0;
+    scored.push({ score, dist, place });
+  }
 
-  return rankSuggestions(trimmed, all, limit, nearLat, nearLng);
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.dist - b.dist ||
+      a.place.name.length - b.place.name.length ||
+      a.place.name.localeCompare(b.place.name, "ja")
+  );
+
+  const results: SuggestItem[] = [];
+  const seen = new Set<string>();
+  for (const { place } of scored) {
+    const key = `${place.name}:${place.lat}:${place.lng}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({
+      name: place.name,
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+    });
+    if (results.length >= limit) break;
+  }
+  return results;
 }

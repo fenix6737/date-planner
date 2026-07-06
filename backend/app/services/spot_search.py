@@ -53,14 +53,6 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
   return 2 * r * math.asin(math.sqrt(a))
 
 
-CATEGORY_COMPAT: dict[str, set[str]] = {
-  "cafe": {"cafe", "gourmet"},
-  "gourmet": {"gourmet", "cafe"},
-  "sightseeing": {"sightseeing", "activity"},
-  "activity": {"activity", "sightseeing"},
-}
-
-
 class SpotSearchService:
   async def search(
     self,
@@ -98,10 +90,8 @@ class SpotSearchService:
       dist = _haversine_km(lat, lng, spot.lat, spot.lng)
       if dist > radius_km:
         continue
-      if category:
-        allowed = CATEGORY_COMPAT.get(category, {category})
-        if spot.category not in allowed:
-          continue
+      if category and spot.category != category:
+        continue
       if budget is not None and spot.price > budget:
         continue
       results.append(spot)
@@ -220,18 +210,31 @@ class SpotSearchService:
       seen.add(key)
       if _haversine_km(lat, lng, spot.lat, spot.lng) > radius_km:
         continue
-      if category:
-        allowed = CATEGORY_COMPAT.get(category, {category})
-        if spot.category not in allowed:
-          continue
+      if category and spot.category != category:
+        continue
       if budget is not None and spot.price > budget:
         continue
       filtered.append(spot)
     return filtered
 
-  async def get_spot_info(self, spot_id: str, source: Optional[str] = None) -> Optional[SpotResult]:
-    if source == "hotpepper" and settings.hotpepper_api_key:
-      return await self._get_hotpepper_spot(spot_id)
+  async def get_spot_info(
+    self,
+    spot_id: str,
+    source: Optional[str] = None,
+    name: Optional[str] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+  ) -> Optional[SpotResult]:
+    if source == "hotpepper" and spot_id and settings.hotpepper_api_key:
+      shop = await self._get_hotpepper_by_id(spot_id)
+      if shop:
+        return shop
+
+    if source == "yahoo" and spot_id and settings.yahoo_app_id:
+      shop = await self._get_yahoo_by_id(spot_id)
+      if shop:
+        return shop
+
     if spot_id.startswith("mock-") or source == "mock":
       parts = spot_id.split("-")
       if len(parts) >= 2:
@@ -255,21 +258,45 @@ class SpotSearchService:
               review_count=reviews,
               source="mock",
               category=category,
-              lat=35.66,
-              lng=139.70,
+              lat=lat or 35.66,
+              lng=lng or 139.70,
               hours="10:00-21:00",
               url="https://example.com/spot",
             )
         except ValueError:
           pass
+
+    if lat is not None and lng is not None:
+      label = name or spot_id
+      nearby = await self.search(lat, lng, radius_km=0.5)
+      if nearby:
+        match = next((s for s in nearby if s.id == spot_id or s.name == label), nearby[0])
+        return match
+      return SpotResult(
+        id=spot_id,
+        name=label,
+        address=label,
+        lat=lat,
+        lng=lng,
+        price=0,
+        rating=0.0,
+        review_count=0,
+        source=source or "user",
+        category="sightseeing",
+      )
+
     return None
 
-  async def _get_hotpepper_spot(self, shop_id: str) -> Optional[SpotResult]:
+  async def _get_hotpepper_by_id(self, shop_id: str) -> Optional[SpotResult]:
     try:
       async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.get(
           "https://webservice.recruit.co.jp/hotpepper/gourmet/v1/",
-          params={"key": settings.hotpepper_api_key, "id": shop_id, "format": "json"},
+          params={
+            "key": settings.hotpepper_api_key,
+            "id": shop_id,
+            "format": "json",
+          },
         )
         response.raise_for_status()
         data = response.json()
@@ -281,7 +308,6 @@ class SpotSearchService:
       shop = shops[0]
       avg = shop.get("budget", {}).get("average", "0円")
       price = int("".join(filter(str.isdigit, avg)) or "0")
-      open_hours = shop.get("open", "")
       return SpotResult(
         id=shop.get("id"),
         name=shop.get("name", ""),
@@ -294,8 +320,43 @@ class SpotSearchService:
         source="hotpepper",
         category="gourmet",
         image_url=shop.get("photo", {}).get("pc", {}).get("l"),
-        hours=open_hours,
+        hours=shop.get("open", ""),
         url=shop.get("urls", {}).get("pc"),
+      )
+    except Exception:
+      return None
+
+  async def _get_yahoo_by_id(self, feature_id: str) -> Optional[SpotResult]:
+    try:
+      async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+          "https://map.yahooapis.jp/search/local/V1/localSearch",
+          params={
+            "appid": settings.yahoo_app_id,
+            "cid": feature_id,
+            "output": "json",
+          },
+        )
+        response.raise_for_status()
+        data = response.json()
+      features = data.get("Feature", [])
+      if not features:
+        return None
+      feature = features[0]
+      prop = feature.get("Property", {})
+      geom = feature.get("Geometry", {}).get("Coordinates", "0,0").split(",")
+      return SpotResult(
+        id=feature.get("Id"),
+        name=prop.get("Name", ""),
+        address=prop.get("Address", ""),
+        lat=float(geom[1]),
+        lng=float(geom[0]),
+        price=0,
+        rating=0.0,
+        review_count=int(prop.get("ReviewCount", 0) or 0),
+        source="yahoo",
+        category="sightseeing",
+        url=prop.get("Url"),
       )
     except Exception:
       return None

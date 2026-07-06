@@ -55,22 +55,20 @@ export default function PlanMap({
 
   return (
     <div className="overflow-hidden rounded-xl border border-[#8b5e3c]/20">
-      {!compact && (
-        <div className="grid grid-cols-3 gap-2 border-b border-white/50 bg-[#f5ebe0] p-4 text-center text-sm">
-          <div>
-            <p className="font-medium text-[#8b7355]">時間</p>
-            <p className="text-[#5c4030]">{totalTime || "—"}</p>
-          </div>
-          <div>
-            <p className="font-medium text-[#8b7355]">距離</p>
-            <p className="text-[#5c4030]">{totalDistance || "—"}</p>
-          </div>
-          <div>
-            <p className="font-medium text-[#8b7355]">費用</p>
-            <p className="text-[#5c4030]">{(totalPrice || 0).toLocaleString()}円</p>
-          </div>
+      <div className="grid grid-cols-3 gap-2 border-b border-white/50 bg-[#f5ebe0] p-3 text-center text-sm">
+        <div>
+          <p className="font-medium text-[#8b7355]">時間</p>
+          <p className="text-[#5c4030]">{totalTime || "—"}</p>
         </div>
-      )}
+        <div>
+          <p className="font-medium text-[#8b7355]">距離</p>
+          <p className="text-[#5c4030]">{totalDistance || "—"}</p>
+        </div>
+        <div>
+          <p className="font-medium text-[#8b7355]">料金目安</p>
+          <p className="font-semibold text-[#5c4030]">{(totalPrice || 0).toLocaleString()}円</p>
+        </div>
+      </div>
       <div className={compact ? "h-[480px]" : "h-[400px]"}>
         <MapContainer center={center} zoom={14} className="h-full w-full" scrollWheelZoom>
           <TileLayer attribution={MAP_ATTRIBUTION} url={MAP_TILE_URL} />

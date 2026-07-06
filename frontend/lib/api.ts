@@ -208,8 +208,17 @@ export async function getPlanByShare(token: string): Promise<PlanResponse> {
   return apiFetch(`/api/plans/share/${token}`);
 }
 
-export async function getSpotInfo(id: string, source?: string): Promise<SpotResult> {
+export async function getSpotInfo(
+  id: string,
+  source?: string,
+  name?: string,
+  lat?: number,
+  lng?: number
+): Promise<SpotResult> {
   const params = new URLSearchParams({ id });
   if (source) params.set("source", source);
+  if (name) params.set("name", name);
+  if (lat !== undefined) params.set("lat", String(lat));
+  if (lng !== undefined) params.set("lng", String(lng));
   return apiFetch(`/api/spotInfo?${params}`);
 }

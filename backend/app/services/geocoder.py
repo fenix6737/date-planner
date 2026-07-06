@@ -41,10 +41,14 @@ class GeocoderService:
         return 0.0
       if cand.startswith(q) or cand_base.startswith(q_base):
         best = 1.0 if best is None else min(best, 1.0)
-      elif len(q) >= 2 and (q in cand or q_base in cand_base):
+      elif q.startswith(cand) or q_base.startswith(cand_base):
         best = 2.0 if best is None else min(best, 2.0)
-      elif len(q) >= 2 and (cand in q or cand_base in q_base):
+      elif cand.startswith(q_base) or q_base.startswith(cand_base):
+        best = 2.5 if best is None else min(best, 2.5)
+      elif q in cand or q_base in cand_base:
         best = 3.0 if best is None else min(best, 3.0)
+      elif cand in q or cand_base in q_base:
+        best = 4.0 if best is None else min(best, 4.0)
     return best
 
   def _local_search(
@@ -68,7 +72,7 @@ class GeocoderService:
     results = []
     seen = set()
     for _, _, place in scored:
-      key = place["name"]
+      key = (place["name"], round(place["lat"], 4), round(place["lng"], 4))
       if key in seen:
         continue
       seen.add(key)
@@ -101,15 +105,6 @@ class GeocoderService:
     a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
 
-  def _is_strong_match(self, query: str, result: dict) -> bool:
-    q = self._normalize(query)
-    name = self._normalize(result["name"])
-    if name == q or name.startswith(q):
-      return True
-    q_base = self._strip_admin_suffix(q)
-    name_base = self._strip_admin_suffix(name)
-    return name_base == q_base or name_base.startswith(q_base)
-
   async def suggest(
     self,
     query: str,
@@ -127,61 +122,31 @@ class GeocoderService:
       ]
 
     local_results = self._local_search(normalized, limit=limit, near_lat=near_lat, near_lng=near_lng)
-    strong_local = [r for r in local_results if self._is_strong_match(normalized, r)]
+    if len(local_results) >= limit:
+      return local_results[:limit]
 
+    gsi_results = await self._gsi_search(normalized, limit - len(local_results))
     merged = list(local_results)
-    seen = {(item["name"], round(item["lat"], 4)) for item in merged}
-
-    if len(strong_local) < limit:
-      gsi_results = await self._gsi_search(normalized, limit)
-      for item in gsi_results:
-        key = (item["name"], round(item["lat"], 4))
-        if key in seen:
-          continue
-        seen.add(key)
-        merged.append(item)
+    seen = {item["name"] for item in merged}
+    for item in gsi_results:
+      if item["name"] in seen:
+        continue
+      seen.add(item["name"])
+      merged.append(item)
+      if len(merged) >= limit:
+        break
 
     if len(merged) < limit:
       poi_results = await self._poi.search(normalized, near_lat, near_lng, limit - len(merged))
       for item in poi_results:
-        key = (item["name"], round(item["lat"], 4))
-        if key in seen:
+        if item["name"] in seen:
           continue
-        seen.add(key)
+        seen.add(item["name"])
         merged.append(item)
         if len(merged) >= limit:
           break
 
-    merged = self._rerank_suggestions(normalized, merged, near_lat, near_lng)
     return merged[:limit]
-
-  def _rerank_suggestions(
-    self,
-    query: str,
-    results: list[dict],
-    near_lat: Optional[float],
-    near_lng: Optional[float],
-  ) -> list[dict]:
-    scored: list[tuple[float, float, dict]] = []
-    for item in results:
-      entry: PlaceEntry = {
-        "name": item["name"],
-        "address": item["address"],
-        "lat": item["lat"],
-        "lng": item["lng"],
-        "aliases": [],
-      }
-      score = self._score_place(query, entry)
-      if score is None:
-        score = 5.0
-      dist = (
-        self._haversine_km(near_lat, near_lng, item["lat"], item["lng"])
-        if near_lat is not None and near_lng is not None
-        else 0.0
-      )
-      scored.append((score, dist, item))
-    scored.sort(key=lambda x: (x[0], x[1], len(x[2]["name"])))
-    return [item for _, _, item in scored]
 
   async def reverse_geocode(self, lat: float, lng: float) -> dict:
     cache_key = f"reverse:{round(lat, 5)}:{round(lng, 5)}"
@@ -302,17 +267,17 @@ class GeocoderService:
             continue
           title = str(props.get("title") or query).strip()
           short_name = title
-          for marker in ("都", "道", "府", "県"):
-            if marker in title:
-              short_name = title.split(marker, 1)[-1] or title
-              break
-          display_name = short_name if len(short_name) <= 20 else title
+          if not any(marker in query for marker in ("町", "村")):
+            for marker in ("都", "道", "府", "県"):
+              if marker in title:
+                short_name = title.split(marker, 1)[-1] or title
+                break
           key = f"{title}:{coords[0]}:{coords[1]}"
           if key in seen:
             continue
           seen.add(key)
           items.append({
-            "name": display_name,
+            "name": short_name,
             "address": title,
             "lat": float(coords[1]),
             "lng": float(coords[0]),
