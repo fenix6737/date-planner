@@ -43,6 +43,14 @@ cd backend
 pytest tests/ -v
 ```
 
-## API キー
+## 本番デプロイ
 
-[docs/API_KEYS.md](docs/API_KEYS.md) を参照。未取得時はモックモードで動作します。
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/fenix6737/date-planner)
+
+詳細は [docs/DEPLOY.md](docs/DEPLOY.md) を参照。
+
+- **GitHub**: https://github.com/fenix6737/date-planner
+- **フロント（本番）**: https://dateplanner-web.onrender.com
+- **API（本番）**: https://dateplanner-api.onrender.com
+
+デプロイ時に `HOTPEPPER_API_KEY` を Render の環境変数に設定してください。
