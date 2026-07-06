@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { suggestPlaces, type SuggestItem } from "@/lib/api";
-import { localSuggest, mergeRankedSuggestions } from "@/lib/localSuggest";
+import { hasStrongLocalMatches, localSuggest, mergeRankedSuggestions } from "@/lib/localSuggest";
 
 interface PlaceAutocompleteProps {
   id: string;
@@ -14,10 +14,6 @@ interface PlaceAutocompleteProps {
   nearLng?: number;
   onChange: (value: string) => void;
   onSelect: (item: SuggestItem) => void;
-}
-
-function mergeSuggestions(query: string, local: SuggestItem[], remote: SuggestItem[], limit: number): SuggestItem[] {
-  return mergeRankedSuggestions(query, local, remote, limit);
 }
 
 export default function PlaceAutocomplete({
@@ -32,7 +28,7 @@ export default function PlaceAutocomplete({
 }: PlaceAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<SuggestItem[]>([]);
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loadingRemote, setLoadingRemote] = useState(false);
   const [searched, setSearched] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
@@ -45,49 +41,59 @@ export default function PlaceAutocomplete({
     }
   }, []);
 
-  const fetchSuggestions = useCallback(
-    async (query: string) => {
-      const current = ++requestId.current;
+  const applyLocal = useCallback(
+    (query: string) => {
       const limit = query ? 20 : 47;
       const local = localSuggest(query, limit, nearLat, nearLng);
-
-      setLoading(true);
-      setFetchError(false);
       setSuggestions(local);
       setOpen(true);
       setSearched(true);
+      setFetchError(false);
       updateMenuRect();
+      return local;
+    },
+    [nearLat, nearLng, updateMenuRect]
+  );
 
+  const fetchRemote = useCallback(
+    async (query: string, local: SuggestItem[]) => {
+      if (query && hasStrongLocalMatches(query)) {
+        return;
+      }
+
+      const current = ++requestId.current;
+      setLoadingRemote(true);
       try {
+        const limit = query ? 20 : 47;
         const remote = await suggestPlaces(query, nearLat, nearLng, limit);
         if (current !== requestId.current) return;
-        setSuggestions(mergeSuggestions(query, local, remote, limit));
+        setSuggestions(mergeRankedSuggestions(query, local, remote, limit));
+        setFetchError(false);
       } catch {
         if (current !== requestId.current) return;
         setFetchError(local.length === 0);
         setSuggestions(local);
       } finally {
-        if (current === requestId.current) setLoading(false);
+        if (current === requestId.current) setLoadingRemote(false);
       }
     },
-    [nearLat, nearLng, updateMenuRect]
+    [nearLat, nearLng]
   );
 
   useEffect(() => {
     const trimmed = value.trim();
-    if (trimmed.length < 1) {
-      setSuggestions([]);
-      setSearched(false);
-      setFetchError(false);
+    const local = applyLocal(trimmed);
+
+    if (!trimmed) {
       return;
     }
 
     const timer = setTimeout(() => {
-      fetchSuggestions(trimmed);
-    }, 300);
+      void fetchRemote(trimmed, local);
+    }, 700);
 
     return () => clearTimeout(timer);
-  }, [value, fetchSuggestions]);
+  }, [value, applyLocal, fetchRemote]);
 
   useEffect(() => {
     if (!open) return;
@@ -125,11 +131,12 @@ export default function PlaceAutocomplete({
 
   const handleFocus = () => {
     updateMenuRect();
-    if (value.trim().length < 1) {
-      fetchSuggestions("");
-      return;
-    }
-    if (suggestions.length > 0 || searched) setOpen(true);
+    applyLocal(value.trim());
+  };
+
+  const handleInputChange = (nextValue: string) => {
+    onChange(nextValue);
+    applyLocal(nextValue.trim());
   };
 
   const menu =
@@ -147,14 +154,19 @@ export default function PlaceAutocomplete({
             }}
             role="listbox"
           >
-            {loading && suggestions.length === 0 && (
+            {loadingRemote && suggestions.length === 0 && (
               <p className="px-5 py-4 text-sm text-[#8b7355]">候補を検索中...</p>
             )}
-            {!loading && suggestions.length > 0 && (
+            {suggestions.length > 0 && (
               <>
                 {!value.trim() && (
                   <p className="suggest-hint px-5 py-3 text-sm text-[#8b7355]">
                     都道府県から選べます（全47件）
+                  </p>
+                )}
+                {loadingRemote && value.trim() && (
+                  <p className="suggest-hint px-5 py-2 text-xs text-[#8b7355]">
+                    追加候補を検索中...
                   </p>
                 )}
                 <ul>
@@ -178,12 +190,12 @@ export default function PlaceAutocomplete({
                 </ul>
               </>
             )}
-            {!loading && fetchError && (
+            {!loadingRemote && fetchError && suggestions.length === 0 && (
               <p className="px-5 py-4 text-sm leading-relaxed text-[#8b7355]">
-                サーバーに接続できませんでした。表示中の候補から選ぶか、しばらくして再試行してください。
+                サーバーに接続できませんでした。市区町村名をもう一度入力してください。
               </p>
             )}
-            {!loading && !fetchError && searched && suggestions.length === 0 && value.trim().length >= 1 && (
+            {!loadingRemote && !fetchError && searched && suggestions.length === 0 && value.trim().length >= 1 && (
               <p className="px-5 py-4 text-sm leading-relaxed text-[#8b7355]">
                 候補が見つかりません。市区町村・駅名・店名で入力してください
               </p>
@@ -203,11 +215,7 @@ export default function PlaceAutocomplete({
         type="text"
         className="input-field text-lg"
         value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-          updateMenuRect();
-        }}
+        onChange={(e) => handleInputChange(e.target.value)}
         onFocus={handleFocus}
         placeholder={placeholder}
         autoComplete="off"

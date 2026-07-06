@@ -10,6 +10,7 @@ type LocalPlace = {
 };
 
 const LOCAL_PLACES = places as LocalPlace[];
+const PREFECTURES = LOCAL_PLACES.filter((p) => p.name === p.address);
 
 function normalize(text: string): string {
   return text.trim().replace(/　/g, " ").toLowerCase();
@@ -22,17 +23,42 @@ function stripAdminSuffix(text: string): string {
   return text;
 }
 
-export function rankPlace(query: string, place: Pick<SuggestItem, "name" | "address">): number | null {
+function splitAdminTokens(query: string): string[] {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const tokens: string[] = [];
+  const re = /([^都道府県]+[都道府県]|[^市区町村]+[市区町村])/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(trimmed)) !== null) {
+    tokens.push(match[0]);
+  }
+
+  if (tokens.length === 0) return [trimmed];
+  return tokens;
+}
+
+function placeCandidates(place: LocalPlace): string[] {
+  return [
+    normalize(place.name),
+    normalize(place.address),
+    ...(place.aliases || []).map(normalize),
+  ].filter(Boolean);
+}
+
+export function rankPlace(
+  query: string,
+  place: Pick<SuggestItem, "name" | "address"> & { aliases?: string[] }
+): number | null {
   const q = normalize(query);
   if (!q) {
     return place.name === place.address ? 0 : 5;
   }
 
   const qBase = stripAdminSuffix(q);
-  const names = [normalize(place.name), normalize(place.address)];
   let best: number | null = null;
 
-  for (const cand of names) {
+  for (const cand of placeCandidates(place as LocalPlace)) {
     if (!cand) continue;
     const candBase = stripAdminSuffix(cand);
     let score: number | null = null;
@@ -51,8 +77,56 @@ export function rankPlace(query: string, place: Pick<SuggestItem, "name" | "addr
   return best;
 }
 
-function scorePlace(query: string, place: LocalPlace): number | null {
-  return rankPlace(query, place);
+function searchOnce(
+  query: string,
+  limit: number,
+  nearLat?: number,
+  nearLng?: number
+): SuggestItem[] {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return PREFECTURES.slice(0, limit).map((place) => ({
+      name: place.name,
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+    }));
+  }
+
+  const scored: Array<{ score: number; dist: number; place: LocalPlace }> = [];
+  for (const place of LOCAL_PLACES) {
+    const score = rankPlace(trimmed, place);
+    if (score === null) continue;
+    const dist =
+      nearLat !== undefined && nearLng !== undefined
+        ? Math.hypot(place.lat - nearLat, place.lng - nearLng)
+        : 0;
+    scored.push({ score, dist, place });
+  }
+
+  scored.sort(
+    (a, b) =>
+      a.score - b.score ||
+      a.dist - b.dist ||
+      a.place.name.length - b.place.name.length ||
+      a.place.name.localeCompare(b.place.name, "ja")
+  );
+
+  const results: SuggestItem[] = [];
+  const seen = new Set<string>();
+  for (const { place } of scored) {
+    const key = `${place.name}:${place.lat}:${place.lng}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({
+      name: place.name,
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+    });
+    if (results.length >= limit) break;
+  }
+  return results;
 }
 
 export function mergeRankedSuggestions(
@@ -92,41 +166,38 @@ export function localSuggest(
 ): SuggestItem[] {
   const trimmed = query.trim();
   if (!trimmed) {
-    return LOCAL_PLACES.filter((p) => p.address === p.name).slice(0, limit);
+    return searchOnce("", limit, nearLat, nearLng);
   }
 
-  const scored: Array<{ score: number; dist: number; place: LocalPlace }> = [];
-  for (const place of LOCAL_PLACES) {
-    const score = scorePlace(trimmed, place);
-    if (score === null) continue;
-    const dist =
-      nearLat !== undefined && nearLng !== undefined
-        ? Math.hypot(place.lat - nearLat, place.lng - nearLng)
-        : 0;
-    scored.push({ score, dist, place });
-  }
-
-  scored.sort(
-    (a, b) =>
-      a.score - b.score ||
-      a.dist - b.dist ||
-      a.place.name.length - b.place.name.length ||
-      a.place.name.localeCompare(b.place.name, "ja")
-  );
-
-  const results: SuggestItem[] = [];
+  const tokens = splitAdminTokens(trimmed);
+  const merged: SuggestItem[] = [];
   const seen = new Set<string>();
-  for (const { place } of scored) {
-    const key = `${place.name}:${place.lat}:${place.lng}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    results.push({
-      name: place.name,
-      address: place.address,
-      lat: place.lat,
-      lng: place.lng,
-    });
-    if (results.length >= limit) break;
+
+  for (const token of tokens) {
+    for (const item of searchOnce(token, limit, nearLat, nearLng)) {
+      const key = `${item.name}:${item.lat}:${item.lng}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
   }
-  return results;
+
+  if (merged.length < limit) {
+    for (const item of searchOnce(trimmed, limit, nearLat, nearLng)) {
+      const key = `${item.name}:${item.lat}:${item.lng}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+
+  return mergeRankedSuggestions(trimmed, merged, [], limit);
+}
+
+export function hasStrongLocalMatches(query: string, minCount = 5): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) return true;
+  const results = localSuggest(trimmed, minCount, undefined, undefined);
+  if (results.length < minCount) return false;
+  return results.every((item) => (rankPlace(trimmed, item) ?? 99) <= 2);
 }
