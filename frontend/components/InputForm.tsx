@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { geocode, generatePlan, reverseGeocode, suggestPlaces, type SuggestItem } from "@/lib/api";
+import { geocode, generatePlan, reverseGeocode, type SuggestItem } from "@/lib/api";
 import { loadSavedNote } from "@/lib/storage";
 import PlaceAutocomplete from "./PlaceAutocomplete";
 
@@ -68,27 +68,16 @@ export default function InputForm() {
       const requestId = ++geocodeRequestRef.current;
       setMapLoading(true);
       try {
-        const suggestions = await suggestPlaces(trimmed, nearLat, nearLng);
-        if (requestId !== geocodeRequestRef.current || departurePickRef.current) return;
-
-        const exact = suggestions.find((s) => s.name === trimmed || s.address.includes(trimmed));
-        const best = exact || suggestions[0];
-        if (best) {
-          setDepartureCoords({ lat: best.lat, lng: best.lng, address: best.address });
+        const loc = await geocode(trimmed, nearLat, nearLng);
+        if (requestId === geocodeRequestRef.current && !departurePickRef.current) {
+          setDepartureCoords(loc);
         }
       } catch {
-        try {
-          const loc = await geocode(trimmed, nearLat, nearLng);
-          if (requestId === geocodeRequestRef.current && !departurePickRef.current) {
-            setDepartureCoords(loc);
-          }
-        } catch {
-          // keep previous marker or japan overview
-        }
+        // keep previous marker or japan overview
       } finally {
         if (requestId === geocodeRequestRef.current) setMapLoading(false);
       }
-    }, 500);
+    }, 600);
 
     return () => clearTimeout(timer);
   }, [departure, nearLat, nearLng]);

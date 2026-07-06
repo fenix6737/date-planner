@@ -112,12 +112,18 @@ export interface PlanResponse {
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...(options?.headers as Record<string, string> | undefined),
+  };
+  if (method !== "GET" && method !== "HEAD" && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
+    headers,
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Request failed" }));

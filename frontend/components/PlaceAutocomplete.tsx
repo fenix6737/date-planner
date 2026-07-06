@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { suggestPlaces, type SuggestItem } from "@/lib/api";
+import { localSuggest } from "@/lib/localSuggest";
 
 interface PlaceAutocompleteProps {
   id: string;
@@ -13,6 +14,19 @@ interface PlaceAutocompleteProps {
   nearLng?: number;
   onChange: (value: string) => void;
   onSelect: (item: SuggestItem) => void;
+}
+
+function mergeSuggestions(local: SuggestItem[], remote: SuggestItem[], limit: number): SuggestItem[] {
+  const merged: SuggestItem[] = [];
+  const seen = new Set<string>();
+  for (const item of [...local, ...remote]) {
+    const key = `${item.name}:${item.lat}:${item.lng}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+    if (merged.length >= limit) break;
+  }
+  return merged;
 }
 
 export default function PlaceAutocomplete({
@@ -29,6 +43,7 @@ export default function PlaceAutocomplete({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
   const [menuRect, setMenuRect] = useState<DOMRect | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const requestId = useRef(0);
@@ -42,20 +57,24 @@ export default function PlaceAutocomplete({
   const fetchSuggestions = useCallback(
     async (query: string) => {
       const current = ++requestId.current;
+      const limit = query ? 20 : 47;
+      const local = localSuggest(query, limit, nearLat, nearLng);
+
       setLoading(true);
+      setFetchError(false);
+      setSuggestions(local);
+      setOpen(true);
+      setSearched(true);
+      updateMenuRect();
+
       try {
-        const results = await suggestPlaces(query, nearLat, nearLng, query ? 20 : 47);
+        const remote = await suggestPlaces(query, nearLat, nearLng, limit);
         if (current !== requestId.current) return;
-        setSuggestions(results);
-        setOpen(true);
-        setSearched(true);
-        updateMenuRect();
+        setSuggestions(mergeSuggestions(local, remote, limit));
       } catch {
         if (current !== requestId.current) return;
-        setSuggestions([]);
-        setOpen(true);
-        setSearched(true);
-        updateMenuRect();
+        setFetchError(local.length === 0);
+        setSuggestions(local);
       } finally {
         if (current === requestId.current) setLoading(false);
       }
@@ -68,12 +87,13 @@ export default function PlaceAutocomplete({
     if (trimmed.length < 1) {
       setSuggestions([]);
       setSearched(false);
+      setFetchError(false);
       return;
     }
 
     const timer = setTimeout(() => {
       fetchSuggestions(trimmed);
-    }, 200);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [value, fetchSuggestions]);
@@ -109,6 +129,7 @@ export default function PlaceAutocomplete({
     setOpen(false);
     setSuggestions([]);
     setSearched(false);
+    setFetchError(false);
   };
 
   const handleFocus = () => {
@@ -135,7 +156,7 @@ export default function PlaceAutocomplete({
             }}
             role="listbox"
           >
-            {loading && (
+            {loading && suggestions.length === 0 && (
               <p className="px-5 py-4 text-sm text-[#8b7355]">候補を検索中...</p>
             )}
             {!loading && suggestions.length > 0 && (
@@ -166,7 +187,12 @@ export default function PlaceAutocomplete({
                 </ul>
               </>
             )}
-            {!loading && searched && suggestions.length === 0 && value.trim().length >= 1 && (
+            {!loading && fetchError && (
+              <p className="px-5 py-4 text-sm leading-relaxed text-[#8b7355]">
+                サーバーに接続できませんでした。表示中の候補から選ぶか、しばらくして再試行してください。
+              </p>
+            )}
+            {!loading && !fetchError && searched && suggestions.length === 0 && value.trim().length >= 1 && (
               <p className="px-5 py-4 text-sm leading-relaxed text-[#8b7355]">
                 候補が見つかりません。市区町村・駅名・店名で入力してください
               </p>
