@@ -1,13 +1,18 @@
 import math
+import re
 from typing import Optional
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.data.japan_places import JAPAN_PLACES, PlaceEntry
+from app.data.japan_places import JAPAN_PLACES, PREFECTURES, PlaceEntry
+from app.data.poi_places import POI_SPOTS
 from app.models.models import GeocodeCache
 from app.services.poi_search import PoiSearchService
+
+POI_NAMES = {place["name"] for place in POI_SPOTS}
+AREA_NAME_RE = re.compile(r"(?:都|道|府|県|市|区|町|村|駅|公園|城|寺|社|堀|橋)$")
 
 
 class GeocoderService:
@@ -51,20 +56,91 @@ class GeocoderService:
         best = 4.0 if best is None else min(best, 4.0)
     return best
 
+  def _is_area_place(self, place: dict) -> bool:
+    name = place["name"]
+    if name == place["address"]:
+      return True
+    if name in POI_NAMES:
+      return False
+    return bool(AREA_NAME_RE.search(name))
+
+  def _place_in_prefecture(self, place: dict, prefecture: Optional[str]) -> bool:
+    if not prefecture:
+      return True
+    return place["address"].startswith(prefecture) or place["name"] == prefecture
+
+  def _resolve_prefecture_browse(self, query: str) -> Optional[str]:
+    q = self._normalize(query)
+    if not q:
+      return None
+    for pref in PREFECTURES:
+      name = self._normalize(pref["name"])
+      if q == name or name.startswith(q):
+        return pref["name"]
+    return None
+
+  def _list_prefecture_places(self, prefecture: str, limit: int) -> list[dict]:
+    matches = [
+      place for place in JAPAN_PLACES
+      if place["address"].startswith(prefecture) or place["name"] == prefecture
+    ]
+
+    def rank(place: PlaceEntry) -> tuple[int, str]:
+      if place["name"] == prefecture:
+        return (0, place["name"])
+      if place["name"].endswith(("市", "町", "村")):
+        return (1, place["name"])
+      if place["name"].endswith("区"):
+        return (2, place["name"])
+      if place["name"].endswith("駅"):
+        return (3, place["name"])
+      if self._is_area_place(place):
+        return (4, place["name"])
+      return (5, place["name"])
+
+    matches.sort(key=rank)
+    return [
+      {"name": p["name"], "address": p["address"], "lat": p["lat"], "lng": p["lng"]}
+      for p in matches[:limit]
+    ]
+
+  def _apply_filters(self, items: list[dict], areas_only: bool, prefecture: Optional[str]) -> list[dict]:
+    return [
+      item for item in items
+      if (not areas_only or self._is_area_place(item))
+      and self._place_in_prefecture(item, prefecture)
+    ]
+
   def _local_search(
     self,
     query: str,
     limit: int = 20,
     near_lat: Optional[float] = None,
     near_lng: Optional[float] = None,
+    areas_only: bool = False,
+    prefecture: Optional[str] = None,
   ) -> list[dict]:
+    normalized = query.strip()
+    prefecture_browse = self._resolve_prefecture_browse(normalized) if normalized else None
+    if prefecture_browse:
+      return self._apply_filters(
+        self._list_prefecture_places(prefecture_browse, limit),
+        areas_only,
+        prefecture,
+      )[:limit]
+
+    use_distance = near_lat is not None and near_lng is not None
     scored: list[tuple[float, float, PlaceEntry]] = []
     for place in JAPAN_PLACES:
+      if areas_only and not self._is_area_place(place):
+        continue
+      if not self._place_in_prefecture(place, prefecture):
+        continue
       score = self._score_place(query, place)
       if score is not None:
         dist = (
           self._haversine_km(near_lat, near_lng, place["lat"], place["lng"])
-          if near_lat is not None and near_lng is not None
+          if use_distance
           else 0.0
         )
         scored.append((score, dist, place))
@@ -111,37 +187,53 @@ class GeocoderService:
     near_lat: Optional[float] = None,
     near_lng: Optional[float] = None,
     limit: int = 20,
+    areas_only: bool = False,
+    prefecture: Optional[str] = None,
   ) -> list[dict]:
     normalized = query.strip()
     if len(normalized) < 1:
-      from app.data.japan_places import PREFECTURES
-
-      return [
+      items = [
         {"name": p["name"], "address": p["address"], "lat": p["lat"], "lng": p["lng"]}
         for p in PREFECTURES[:limit]
       ]
+      return self._apply_filters(items, areas_only, prefecture)[:limit]
 
-    local_results = self._local_search(normalized, limit=limit, near_lat=near_lat, near_lng=near_lng)
-    if len(local_results) >= limit:
+    local_results = self._local_search(
+      normalized,
+      limit=limit,
+      near_lat=near_lat,
+      near_lng=near_lng,
+      areas_only=areas_only,
+      prefecture=prefecture,
+    )
+    if len(local_results) >= limit or self._resolve_prefecture_browse(normalized):
       return local_results[:limit]
 
     gsi_results = await self._gsi_search(normalized, limit - len(local_results))
     merged = list(local_results)
-    seen = {item["name"] for item in merged}
+    seen = {(item["name"], round(item["lat"], 4), round(item["lng"], 4)) for item in merged}
     for item in gsi_results:
-      if item["name"] in seen:
+      key = (item["name"], round(item["lat"], 4), round(item["lng"], 4))
+      if key in seen:
         continue
-      seen.add(item["name"])
+      if areas_only and not self._is_area_place(item):
+        continue
+      if not self._place_in_prefecture(item, prefecture):
+        continue
+      seen.add(key)
       merged.append(item)
       if len(merged) >= limit:
         break
 
-    if len(merged) < limit:
+    if len(merged) < limit and not areas_only:
       poi_results = await self._poi.search(normalized, near_lat, near_lng, limit - len(merged))
       for item in poi_results:
-        if item["name"] in seen:
+        key = (item["name"], round(item["lat"], 4), round(item["lng"], 4))
+        if key in seen:
           continue
-        seen.add(item["name"])
+        if not self._place_in_prefecture(item, prefecture):
+          continue
+        seen.add(key)
         merged.append(item)
         if len(merged) >= limit:
           break

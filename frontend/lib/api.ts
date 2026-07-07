@@ -145,13 +145,22 @@ export async function geocode(
 
 export async function suggestPlaces(
   query: string,
-  nearLat?: number,
-  nearLng?: number,
-  limit = 20
+  options: {
+    nearLat?: number;
+    nearLng?: number;
+    limit?: number;
+    areasOnly?: boolean;
+    prefecture?: string;
+  } = {}
 ): Promise<SuggestItem[]> {
-  const params = new URLSearchParams({ q: query, limit: String(limit) });
-  if (nearLat !== undefined) params.set("nearLat", String(nearLat));
-  if (nearLng !== undefined) params.set("nearLng", String(nearLng));
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(options.limit ?? 20),
+  });
+  if (options.nearLat !== undefined) params.set("nearLat", String(options.nearLat));
+  if (options.nearLng !== undefined) params.set("nearLng", String(options.nearLng));
+  if (options.areasOnly) params.set("areasOnly", "true");
+  if (options.prefecture) params.set("prefecture", options.prefecture);
   return apiFetch(`/api/suggest?${params}`);
 }
 

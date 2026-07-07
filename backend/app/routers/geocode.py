@@ -16,10 +16,19 @@ async def suggest_places(
   nearLat: Optional[float] = None,
   nearLng: Optional[float] = None,
   limit: int = Query(20, ge=1, le=47),
+  areasOnly: bool = False,
+  prefecture: Optional[str] = None,
   db: Session = Depends(get_db),
 ):
   service = GeocoderService(db)
-  results = await service.suggest(q, nearLat, nearLng, limit=limit)
+  results = await service.suggest(
+    q,
+    near_lat=nearLat,
+    near_lng=nearLng,
+    limit=limit,
+    areas_only=areasOnly,
+    prefecture=prefecture,
+  )
   return [SuggestItem(**r) for r in results]
 
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { suggestPlaces, type SuggestItem } from "@/lib/api";
 import { hasStrongLocalMatches, localSuggest, mergeRankedSuggestions } from "@/lib/localSuggest";
+import { filterSuggestions } from "@/lib/placeFilters";
 
 interface PlaceAutocompleteProps {
   id: string;
@@ -12,6 +13,10 @@ interface PlaceAutocompleteProps {
   placeholder?: string;
   nearLat?: number;
   nearLng?: number;
+  /** 出発地など地域のみ。店名を候補から除外 */
+  areasOnly?: boolean;
+  /** 出発地点と同じ都道府県内に候補を絞る */
+  filterPrefecture?: string;
   onChange: (value: string) => void;
   onSelect: (item: SuggestItem) => void;
 }
@@ -23,6 +28,8 @@ export default function PlaceAutocomplete({
   placeholder,
   nearLat,
   nearLng,
+  areasOnly = false,
+  filterPrefecture,
   onChange,
   onSelect,
 }: PlaceAutocompleteProps) {
@@ -35,6 +42,8 @@ export default function PlaceAutocomplete({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const requestId = useRef(0);
 
+  const filterOptions = { areasOnly, prefecture: filterPrefecture };
+
   const updateMenuRect = useCallback(() => {
     if (wrapperRef.current) {
       setMenuRect(wrapperRef.current.getBoundingClientRect());
@@ -44,7 +53,12 @@ export default function PlaceAutocomplete({
   const applyLocal = useCallback(
     (query: string) => {
       const limit = query ? 20 : 47;
-      const local = localSuggest(query, limit, nearLat, nearLng);
+      const local = localSuggest(query, limit, {
+        nearLat,
+        nearLng,
+        areasOnly,
+        prefecture: filterPrefecture,
+      });
       setSuggestions(local);
       setOpen(true);
       setSearched(true);
@@ -52,7 +66,7 @@ export default function PlaceAutocomplete({
       updateMenuRect();
       return local;
     },
-    [nearLat, nearLng, updateMenuRect]
+    [nearLat, nearLng, areasOnly, filterPrefecture, updateMenuRect]
   );
 
   const fetchRemote = useCallback(
@@ -65,9 +79,16 @@ export default function PlaceAutocomplete({
       setLoadingRemote(true);
       try {
         const limit = query ? 20 : 47;
-        const remote = await suggestPlaces(query, nearLat, nearLng, limit);
+        const remote = await suggestPlaces(query, {
+          nearLat,
+          nearLng,
+          limit,
+          areasOnly,
+          prefecture: filterPrefecture,
+        });
         if (current !== requestId.current) return;
-        setSuggestions(mergeRankedSuggestions(query, local, remote, limit));
+        const merged = mergeRankedSuggestions(query, local, remote, limit);
+        setSuggestions(filterSuggestions(merged, filterOptions));
         setFetchError(false);
       } catch {
         if (current !== requestId.current) return;
@@ -77,7 +98,7 @@ export default function PlaceAutocomplete({
         if (current === requestId.current) setLoadingRemote(false);
       }
     },
-    [nearLat, nearLng]
+    [nearLat, nearLng, areasOnly, filterPrefecture]
   );
 
   useEffect(() => {
@@ -164,6 +185,11 @@ export default function PlaceAutocomplete({
                     都道府県から選べます（全47件）
                   </p>
                 )}
+                {filterPrefecture && value.trim() && (
+                  <p className="suggest-hint px-5 py-2 text-xs text-[#8b7355]">
+                    {filterPrefecture}内の候補を表示中
+                  </p>
+                )}
                 {loadingRemote && value.trim() && (
                   <p className="suggest-hint px-5 py-2 text-xs text-[#8b7355]">
                     追加候補を検索中...
@@ -197,7 +223,9 @@ export default function PlaceAutocomplete({
             )}
             {!loadingRemote && !fetchError && searched && suggestions.length === 0 && value.trim().length >= 1 && (
               <p className="px-5 py-4 text-sm leading-relaxed text-[#8b7355]">
-                候補が見つかりません。市区町村・駅名・店名で入力してください
+                {filterPrefecture
+                  ? `${filterPrefecture}内に候補が見つかりません。市区町村・駅名で入力してください`
+                  : "候補が見つかりません。市区町村・駅名・店名で入力してください"}
               </p>
             )}
           </div>,

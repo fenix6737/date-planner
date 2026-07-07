@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { geocode, generatePlan, reverseGeocode, type SuggestItem } from "@/lib/api";
 import { loadSavedNote } from "@/lib/storage";
 import PlaceAutocomplete from "./PlaceAutocomplete";
+import { extractPrefecture } from "@/lib/placeFilters";
 
 const DepartureMap = dynamic(() => import("./DepartureMap"), { ssr: false });
 
@@ -35,6 +36,9 @@ export default function InputForm() {
   const gender = typeof window !== "undefined" ? localStorage.getItem("userGender") || "other" : "other";
   const nearLat = departureCoords?.lat;
   const nearLng = departureCoords?.lng;
+  const departurePrefecture =
+    extractPrefecture(departureCoords?.address || "") ||
+    extractPrefecture(departure);
 
   const updateDestination = (index: number, value: string) => {
     setDestinations((prev) => prev.map((d, i) => (i === index ? value : d)));
@@ -175,8 +179,7 @@ export default function InputForm() {
           label="出発地"
           value={departure}
           placeholder="例: 東京都、渋谷区、横浜市、大阪駅"
-          nearLat={nearLat}
-          nearLng={nearLng}
+          areasOnly
           onChange={handleDepartureChange}
           onSelect={handleDepartureSelect}
         />
@@ -199,9 +202,18 @@ export default function InputForm() {
               id={`dest-${i}`}
               label={`場所 ${i + 1}`}
               value={destinations[i]}
-              placeholder={i === 0 ? "例: 渋谷区、道頓堀、もうもう亭" : "空欄でもOK"}
+              placeholder={
+                departurePrefecture
+                  ? i === 0
+                    ? `例: ${departurePrefecture}内の店・施設（もうもう亭など）`
+                    : "空欄でもOK"
+                  : i === 0
+                    ? "先に出発地を選ぶと、この県内の候補に絞れます"
+                    : "空欄でもOK"
+              }
               nearLat={nearLat}
               nearLng={nearLng}
+              filterPrefecture={departurePrefecture}
               onChange={(v) => updateDestination(i, v)}
               onSelect={(item) => handleDestSelect(i, item)}
             />

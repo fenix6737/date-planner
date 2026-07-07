@@ -1,5 +1,6 @@
 import places from "./localPlaces.json";
 import type { SuggestItem } from "./api";
+import { filterSuggestions, isAreaPlace } from "./placeFilters";
 
 type LocalPlace = {
   name: string;
@@ -11,6 +12,7 @@ type LocalPlace = {
 
 const LOCAL_PLACES = places as LocalPlace[];
 const PREFECTURES = LOCAL_PLACES.filter((p) => p.name === p.address);
+const PREFECTURE_NAMES = new Set(PREFECTURES.map((p) => normalize(p.name)));
 
 function normalize(text: string): string {
   return text.trim().replace(/　/g, " ").toLowerCase();
@@ -36,6 +38,27 @@ function splitAdminTokens(query: string): string[] {
 
   if (tokens.length === 0) return [trimmed];
   return tokens;
+}
+
+function resolvePrefectureBrowse(query: string): string | null {
+  const q = normalize(query);
+  if (!q) return null;
+
+  for (const pref of PREFECTURES) {
+    const name = normalize(pref.name);
+    if (q === name || name.startsWith(q)) {
+      return pref.name;
+    }
+  }
+  return null;
+}
+
+function isCityLevel(place: LocalPlace): boolean {
+  return place.name.endsWith("市") || place.name.endsWith("町") || place.name.endsWith("村");
+}
+
+function isWardLevel(place: LocalPlace): boolean {
+  return place.name.endsWith("区");
 }
 
 function placeCandidates(place: LocalPlace): string[] {
@@ -77,11 +100,39 @@ export function rankPlace(
   return best;
 }
 
+function listPrefecturePlaces(prefecture: string, limit: number): SuggestItem[] {
+  const matches = LOCAL_PLACES.filter(
+    (place) => place.address.startsWith(prefecture) || place.name === prefecture
+  );
+
+  matches.sort((a, b) => {
+    const rank = (place: LocalPlace) => {
+      if (place.name === prefecture) return 0;
+      if (isCityLevel(place)) return 1;
+      if (isWardLevel(place)) return 2;
+      if (place.name.endsWith("駅")) return 3;
+      if (isAreaPlace(place)) return 4;
+      return 5;
+    };
+    const diff = rank(a) - rank(b);
+    if (diff !== 0) return diff;
+    return a.name.localeCompare(b.name, "ja");
+  });
+
+  return matches.slice(0, limit).map((place) => ({
+    name: place.name,
+    address: place.address,
+    lat: place.lat,
+    lng: place.lng,
+  }));
+}
+
 function searchOnce(
   query: string,
   limit: number,
   nearLat?: number,
-  nearLng?: number
+  nearLng?: number,
+  useDistance = true
 ): SuggestItem[] {
   const trimmed = query.trim();
   if (!trimmed) {
@@ -93,12 +144,17 @@ function searchOnce(
     }));
   }
 
+  const prefectureBrowse = resolvePrefectureBrowse(trimmed);
+  if (prefectureBrowse) {
+    return listPrefecturePlaces(prefectureBrowse, limit);
+  }
+
   const scored: Array<{ score: number; dist: number; place: LocalPlace }> = [];
   for (const place of LOCAL_PLACES) {
     const score = rankPlace(trimmed, place);
     if (score === null) continue;
     const dist =
-      nearLat !== undefined && nearLng !== undefined
+      useDistance && nearLat !== undefined && nearLng !== undefined
         ? Math.hypot(place.lat - nearLat, place.lng - nearLng)
         : 0;
     scored.push({ score, dist, place });
@@ -108,6 +164,8 @@ function searchOnce(
     (a, b) =>
       a.score - b.score ||
       a.dist - b.dist ||
+      (isCityLevel(a.place) ? 0 : isWardLevel(a.place) ? 1 : 2) -
+        (isCityLevel(b.place) ? 0 : isWardLevel(b.place) ? 1 : 2) ||
       a.place.name.length - b.place.name.length ||
       a.place.name.localeCompare(b.place.name, "ja")
   );
@@ -158,15 +216,26 @@ export function mergeRankedSuggestions(
   return ranked.slice(0, limit).map((entry) => entry.item);
 }
 
+export type LocalSuggestOptions = {
+  nearLat?: number;
+  nearLng?: number;
+  areasOnly?: boolean;
+  prefecture?: string;
+};
+
 export function localSuggest(
   query: string,
   limit = 20,
-  nearLat?: number,
-  nearLng?: number
+  options: LocalSuggestOptions = {}
 ): SuggestItem[] {
+  const { nearLat, nearLng, areasOnly = false, prefecture } = options;
   const trimmed = query.trim();
+  const prefectureBrowse = trimmed ? resolvePrefectureBrowse(trimmed) : null;
+  const useDistance = !prefectureBrowse && !PREFECTURE_NAMES.has(normalize(trimmed));
+
   if (!trimmed) {
-    return searchOnce("", limit, nearLat, nearLng);
+    const base = searchOnce("", limit, nearLat, nearLng, useDistance);
+    return filterSuggestions(base, { areasOnly, prefecture });
   }
 
   const tokens = splitAdminTokens(trimmed);
@@ -174,7 +243,7 @@ export function localSuggest(
   const seen = new Set<string>();
 
   for (const token of tokens) {
-    for (const item of searchOnce(token, limit, nearLat, nearLng)) {
+    for (const item of searchOnce(token, limit, nearLat, nearLng, useDistance)) {
       const key = `${item.name}:${item.lat}:${item.lng}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -183,7 +252,7 @@ export function localSuggest(
   }
 
   if (merged.length < limit) {
-    for (const item of searchOnce(trimmed, limit, nearLat, nearLng)) {
+    for (const item of searchOnce(trimmed, limit, nearLat, nearLng, useDistance)) {
       const key = `${item.name}:${item.lat}:${item.lng}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -191,13 +260,15 @@ export function localSuggest(
     }
   }
 
-  return mergeRankedSuggestions(trimmed, merged, [], limit);
+  const ranked = mergeRankedSuggestions(trimmed, merged, [], limit);
+  return filterSuggestions(ranked, { areasOnly, prefecture });
 }
 
 export function hasStrongLocalMatches(query: string, minCount = 5): boolean {
   const trimmed = query.trim();
   if (!trimmed) return true;
-  const results = localSuggest(trimmed, minCount, undefined, undefined);
+  if (resolvePrefectureBrowse(trimmed)) return true;
+  const results = localSuggest(trimmed, minCount);
   if (results.length < minCount) return false;
   return results.every((item) => (rankPlace(trimmed, item) ?? 99) <= 2);
 }

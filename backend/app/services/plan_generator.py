@@ -9,19 +9,19 @@ from app.services.spot_search import SpotSearchService
 
 ROUTE_STYLES: dict[str, dict[str, Any]] = {
   "relaxed": {
-    "categories": ["cafe", "sightseeing"],
-    "stay_multiplier": 1.4,
-    "max_spots": 4,
+    "categories": ["cafe", "sightseeing", "gourmet"],
+    "stay_multiplier": 1.2,
+    "max_fillers": 6,
   },
   "active": {
-    "categories": ["activity", "sightseeing"],
+    "categories": ["activity", "sightseeing", "gourmet"],
     "stay_multiplier": 0.8,
-    "max_spots": 5,
+    "max_fillers": 7,
   },
   "stylish": {
     "categories": ["cafe", "gourmet"],
     "stay_multiplier": 1.0,
-    "max_spots": 4,
+    "max_fillers": 6,
   },
 }
 
@@ -125,11 +125,11 @@ class PlanGeneratorService:
       start_lng,
       ordered_mandatory,
       scored_fillers,
-      max_per_leg=1,
-      max_total=style["max_spots"],
+      max_per_leg=2,
+      max_total=style["max_fillers"],
     )
 
-    mandatory_names = {s.name for s in mandatory_spots}
+    mandatory_ids = {s.id for s in mandatory_spots}
     plan_items, total_price = await self._build_schedule(
       start_lat,
       start_lng,
@@ -137,8 +137,22 @@ class PlanGeneratorService:
       day_start,
       day_end,
       style["stay_multiplier"],
-      mandatory_names,
+      mandatory_ids,
     )
+
+    mandatory_price = sum(item.budget_est for item in plan_items if item.is_user_destination)
+    if mandatory_price > budget:
+      raise ValueError(
+        "選択した行きたい場所だけで予算を超えています。予算を増やすか、場所を減らしてください"
+      )
+
+    while total_price > budget:
+      removable = [i for i, item in enumerate(plan_items) if not item.is_user_destination]
+      if not removable:
+        break
+      idx = removable[-1]
+      total_price -= plan_items[idx].budget_est
+      plan_items.pop(idx)
 
     if total_price > budget:
       raise ValueError("予算内に収まるプランを作れませんでした。予算を増やすか、行きたい場所を減らしてください")
@@ -190,8 +204,6 @@ class PlanGeneratorService:
       image_url = best.image_url
       hours = best.hours
       url = best.url
-      if best.id:
-        source_id = best.id
     elif budget > 0:
       price_est = min(max(budget // 4, 1000), 4000)
 
@@ -240,7 +252,7 @@ class PlanGeneratorService:
       route = await self.router.get_route(prev_lat, prev_lng, dest.lat, dest.lng)
       geometry = route.get("geometry") or []
       sample_points = self._sample_route_points(
-        geometry, prev_lat, prev_lng, dest.lat, dest.lng, interval_km=0.6
+        geometry, prev_lat, prev_lng, dest.lat, dest.lng, interval_km=0.4
       )
 
       for lat, lng in sample_points:
@@ -248,7 +260,7 @@ class PlanGeneratorService:
           spots = await self.spot_search.search(
             lat=lat,
             lng=lng,
-            radius_km=0.5,
+            radius_km=0.8,
             category=category,
             budget=budget,
           )
@@ -308,7 +320,7 @@ class PlanGeneratorService:
         dist = _distance_to_segment_km(
           filler.lat, filler.lng, prev_lat, prev_lng, dest.lat, dest.lng
         )
-        if dist <= 0.45:
+        if dist <= 0.65:
           leg_fillers.append(filler)
 
       for filler in leg_fillers[:max_per_leg]:
@@ -391,14 +403,14 @@ class PlanGeneratorService:
     day_start: time,
     day_end: time,
     stay_multiplier: float,
-    user_dest_names: set[str],
+    mandatory_ids: set[str],
   ) -> tuple[list[PlanSpotItem], int]:
     current_dt = datetime.combine(datetime.today(), day_start)
     end_dt = datetime.combine(datetime.today(), day_end)
     items: list[PlanSpotItem] = []
     total_price = 0
     prev_lat, prev_lng = start_lat, start_lng
-    scheduled_mandatory = set()
+    scheduled_mandatory: set[str] = set()
 
     for spot in spots:
       route = await self.router.get_route(prev_lat, prev_lng, spot.lat, spot.lng)
@@ -406,14 +418,19 @@ class PlanGeneratorService:
       current_dt += timedelta(minutes=travel_minutes)
 
       base_stay = STAY_MINUTES.get(spot.category or "", DEFAULT_STAY)
+      is_mandatory = spot.id in mandatory_ids
       stay = int(base_stay * stay_multiplier)
+      if is_mandatory:
+        stay = max(30, stay)
+      else:
+        stay = min(stay, 50)
+
       spot_end = current_dt + timedelta(minutes=stay)
-      is_mandatory = spot.name in user_dest_names
 
       if spot_end > end_dt and not is_mandatory:
         continue
-      if spot_end > end_dt and is_mandatory and items:
-        stay = max(15, int((end_dt - current_dt).total_seconds() / 60))
+      if spot_end > end_dt and is_mandatory:
+        stay = max(20, int((end_dt - current_dt).total_seconds() / 60))
         spot_end = current_dt + timedelta(minutes=stay)
 
       time_str = f"{current_dt.strftime('%H:%M')}-{spot_end.strftime('%H:%M')}"
@@ -437,15 +454,15 @@ class PlanGeneratorService:
         )
       )
       if is_mandatory:
-        scheduled_mandatory.add(spot.name)
+        scheduled_mandatory.add(spot.id)
       total_price += spot.price
       current_dt = spot_end
       prev_lat, prev_lng = spot.lat, spot.lng
 
-    missing = user_dest_names - scheduled_mandatory
+    missing = mandatory_ids - scheduled_mandatory
     if missing:
       raise ValueError(
-        f"時間内に全ての行きたい場所を回れませんでした（未反映: {', '.join(sorted(missing))}）。"
+        "時間内に全ての行きたい場所を回れませんでした。"
         "終了時刻を遅くするか、場所の数を減らしてください。"
       )
 
