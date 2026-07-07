@@ -231,6 +231,7 @@ export function localSuggest(
   const { nearLat, nearLng, areasOnly = false, prefecture } = options;
   const trimmed = query.trim();
   const prefectureBrowse = trimmed ? resolvePrefectureBrowse(trimmed) : null;
+  const effectiveLimit = prefectureBrowse ? Math.max(limit, 47) : limit;
   const useDistance = !prefectureBrowse && !PREFECTURE_NAMES.has(normalize(trimmed));
 
   if (!trimmed) {
@@ -243,7 +244,7 @@ export function localSuggest(
   const seen = new Set<string>();
 
   for (const token of tokens) {
-    for (const item of searchOnce(token, limit, nearLat, nearLng, useDistance)) {
+    for (const item of searchOnce(token, effectiveLimit, nearLat, nearLng, useDistance)) {
       const key = `${item.name}:${item.lat}:${item.lng}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -251,8 +252,8 @@ export function localSuggest(
     }
   }
 
-  if (merged.length < limit) {
-    for (const item of searchOnce(trimmed, limit, nearLat, nearLng, useDistance)) {
+  if (merged.length < effectiveLimit) {
+    for (const item of searchOnce(trimmed, effectiveLimit, nearLat, nearLng, useDistance)) {
       const key = `${item.name}:${item.lat}:${item.lng}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -260,7 +261,7 @@ export function localSuggest(
     }
   }
 
-  const ranked = mergeRankedSuggestions(trimmed, merged, [], limit);
+  const ranked = mergeRankedSuggestions(trimmed, merged, [], effectiveLimit);
   return filterSuggestions(ranked, { areasOnly, prefecture });
 }
 
